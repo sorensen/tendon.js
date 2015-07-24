@@ -1,0 +1,28 @@
+{
+  "name": "tendon",
+  "main": "tendon.js",
+  "version": "0.0.1",
+  "authors": [
+    "Beau Sorensen <mail@beausorensen.com>"
+  ],
+  "description": "Two way data bindings for Backbone and the DOM",
+  "keywords": [
+    "backbone",
+    "dom",
+    "bidings"
+  ],
+  "license": "MIT",
+  "homepage": "https://github.com/sorensen/tendon.js",
+  "ignore": [
+    "**/.*",
+    "node_modules",
+    "bower_components",
+    "test",
+    "tests"
+  ],
+  "dependencies": {
+    "jquery": "~2.1.4",
+    "backbone": "~1.2.1",
+    "underscore": "~1.8.3"
+  }
+}

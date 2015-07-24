@@ -1,0 +1,36 @@
+{
+  "name": "tendon",
+  "main": "index.js",
+  "version": "0.0.0",
+  "authors": [
+    "Beau Sorensen <mail@beausorensen.com>"
+  ],
+  "description": "Two way data bindings for Backbone and the DOM",
+  "keywords": [
+    "backbone",
+    "dom",
+    "bidings"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/majorleaguesoccer/respectify.git"
+  },
+  "engines": {
+    "node": "0.x"
+  },
+  "scripts": {
+    "test": "npm run hint",
+    "hint": "./node_modules/jshint/bin/jshint ./tendon.js",
+    "minify": "echo -n ';' > tendon.min.js; ./node_modules/uglify-js/bin/uglifyjs tendon.js -o tendon.min.js -c -m;"
+  },
+  "dependencies": {
+    "backbone": "^1.2.1",
+    "jquery": "^2.1.4",
+    "underscore": "^1.8.3"
+  },
+  "devDependencies": {
+    "jshint": "^2.7.0",
+    "uglify-js": "^2.4.24"
+  }
+}
