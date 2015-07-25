@@ -11,11 +11,11 @@ Tired of writing tons of repetative Backbone code to update the DOM? Tired of wi
 up DOM listeners to update your Backbone models? Well then this might be what you're 
 looking for!
 
-This library has 2 1/2 primary purposes.
+This library has 3 primary purposes.
 
 1. Update the DOM when the JS data changes
 2. Update the JS when the DOM data changes
-2.5. Handle templating because thats how I roll
+3. Handle templating because thats how I roll
 
 This library takes a slightly different approach for data bindings, in that nearly 
 all of the configuration is in the HTML markup itself. The primary reason for this 
@@ -116,6 +116,43 @@ window.app = new View({
 Examples
 --------
 
+### 1 Way Binding - Contents
+
+Lets start off small and create a 1 way binding to update the contents of a div.
+We need to know what events trigger a DOM update, and how to get the data for 
+the update.
+
+1. Listen to the model event `change:username`
+2. Update content with the model `username` property
+
+```html
+<div 
+  tendon-subscribe="model.change:username" 
+  tendon-set-value="model:username"
+></div>
+```
+
+### 1 Way Binding - Attribute
+
+Here we have an element that we only want to update the class attribute on. This 
+is a one-way binding as there is no `tendon-publish` attribute and no way to get 
+a value. The attributes here do the following:
+
+1. Bind content changes to an attribute, `class` in this case, using `tendon-set-attribute`
+2. Use the specific value, `model:status` aka `model.get('status')`, using `tendon-set-value`
+3. Trigger a content update on `model.change:locked` aka `model.on('change:status')`
+
+Using this setup, anytime the model's `status` attribute changes, the DOM element 
+will update its `class` attribute with that value.
+
+```html
+<div 
+  tendon-set-value="model:status" 
+  tendon-set-attribute="class"
+  tendon-subscribe="model.change:status"
+/>
+```
+
 Here we are going to use templates and publishing to setup two way binding. 
 
 1. Listen to the `model` events; `sync`, `change:menuItems`, and `change:activeItem`
@@ -143,53 +180,35 @@ Here we are going to use templates and publishing to setup two way binding.
 ><!-- filed in by Tendon using template above --></ul>
 ```
 
-Here we have an element that we only want to update the class attribute on. This 
-is a one-way binding as there is no `tendon-publish` attribute and no way to get 
-a value. The attributes here do the following:
-
-1. Bind content changes to an attribute, `class` in this case, using `tendon-set-attribute`
-2. Use the specific value, `model:locked` aka `model.get('locked')`, using `tendon-set-value`
-3. Trigger a content update on `model.change:locked` aka `model.on('change:locked')`
-4. Trigger an render on initialization via `tendon-auto-render`
-
-Using this setup, anytime the model's `locked` attribute changes, the DOM element 
-will update its `class` attribute with that value.
-
-```html
-<div 
-  id="login-screen"
-  class="locked"
-  tendon-auto-render="true" 
-  tendon-set-value="model:locked" 
-  tendon-set-attribute="class"
-  tendon-subscribe="model.change:locked"
-/>
-```
 
 HTML Attribute Options
 ----------------------
 
-`tendon-subscribe` {String} list of model events to listen to in the format `model.event:property`
-`tendon-publish` {String} list of model events to publish HTML changes to
-`tendon-auto-render` {Boolean} flag to signal initial rendering call, use if the data already exists in the `context` and the page was not bootstrapped with content
-`tendon-template` {String} jQuery selector for underscore template, if set this will be run with the provided `context` and set as the inner HTML
-`tendon-set-value` {String} model attribute or method to be used as direct value
-`tendon-set-attribute` {String} element attribute to assign value to, innerHTML is set if not specified
-`tendon-listen-to` {String} jQuery selector to specify a child element(s) to listen for changes, instead of the current element
-`tendon-uuid` {String} internally set UUID to identify source of HTML update events
+* `tendon-subscribe` {String} list of model events to listen to in the format `model.event:property`
+* `tendon-publish` {String} list of model events to publish HTML changes to
+* `tendon-auto-render` {Boolean} flag to signal initial rendering call, use if the data already exists in the `context` and the page was not bootstrapped with content
+* `tendon-template` {String} jQuery selector for underscore template, if set this will be run with the provided `context` and set as the inner HTML
+* `tendon-set-value` {String} model attribute or method to be used as direct value
+* `tendon-set-attribute` {String} element attribute to assign value to, innerHTML is set if not specified
+* `tendon-listen-to` {String} jQuery selector to specify a child element(s) to listen for changes, instead of the current element
+* `tendon-uuid` {String} internally set UUID to identify source of HTML update events
 
 
 
 Events
 ------
 
-`updateElement`
-`updateElement:id`
+* `updateElement`
+* `updateElement:id`
 
 
 
 API
 ---
+
+The methods here are mainly all to be used internally, they aren't named fairly 
+well at the moment and will most likely be changed.
+
 
 ### new Tendon($selector, context, options)
 
