@@ -62,7 +62,7 @@ var Backbone = this.Backbone
  * automatically, and bound to the given context.
  */
 
-function Tendon($main, context, options) {
+function Tendon($selector, context, options) {
   this.log('[Tendon.init]')
 
   var self = this
@@ -70,7 +70,7 @@ function Tendon($main, context, options) {
   _.extend(this, Backbone.Events)
 
   // Cache selector, create jQuery context if string provided
-  this.$main = typeof $main === 'string' ? $($main) : $main
+  this.$selector = typeof $selector === 'string' ? $($selector) : $main
   this.context = context || {}
   this.options = _.extend({}, Tendon.defaults, options || {})
 
@@ -78,7 +78,7 @@ function Tendon($main, context, options) {
 
   // Find all HTML elements with tendon-based properties, 
   // run each element found through setup process
-  var $found = $main.find([
+  var $found = $selector.find([
     'template'
   , 'set-value'
   , 'set-attribute'
@@ -102,6 +102,9 @@ function Tendon($main, context, options) {
 Tendon.defaults = Object.freeze({
   // DOM attribute prefix
   prefix: 'tendon-'
+
+  // Debug mode to enable logging
+, debug: false
 
   // Simple template settings. {{ }} vs <% %>
 , templateSettings: {
@@ -204,8 +207,10 @@ Tendon.prototype.updateElement = function($el) {
   }
   if (id) {
     this.log('[Tendon.updateElement] id=' + id, $el)
-    this.trigger('updateElement:' + id, $el)
+    this.trigger('updateElement:' + id, $el, tmp)
   }
+
+  this.trigger('updateElement', $el, tmp)
   return this
 }
 
