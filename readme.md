@@ -132,6 +132,15 @@ the update.
 ></div>
 ```
 
+You can specify multiple subscriptions, and use custom functions for the value
+
+```html
+<div 
+  tendon-subscribe="model.sync,model.change:property,state.change:username change:group" 
+  tendon-set-value="model:someFunction"
+></div>
+```
+
 ### 1 Way Binding - Attribute
 
 Here we have an element that we only want to update the class attribute on. This 
