@@ -1,6 +1,8 @@
 Tendon.js
 =========
 
+## EXPERIMENTAL LIBRARY - NOT PRODUCTION READY
+
 > Two way data binding for [Backbone](http://backbonejs.org/) and the DOM
 
 [![Build Status](https://secure.travis-ci.org/sorensen/tendon.js.png)](http://travis-ci.org/sorensen/tendon.js) 
@@ -92,7 +94,7 @@ var View = Backbone.View.extend({
 
     // The initialize of Tendon is going to find all relevant elements and do 
     // what the markup attributes say
-    this.tendon = new window.Tendon(this.$el, context)
+    this.tendon = new Tendon(this.$el, context)
 
     // You can also listen for specific changes if you want to some extra fancy
     // stuff. Think of things like JSONView or Highlight.js calls.
@@ -108,7 +110,7 @@ var View = Backbone.View.extend({
 })
 
 // Such app creation, new models, wow.
-window.app = new View({
+var app = new View({
   model: new Model()
 })
 ```
@@ -128,7 +130,7 @@ the update.
 ```html
 <div 
   tendon-subscribe="model.change:username" 
-  tendon-set-value="model:username"
+  tendon-set="model:username"
 ></div>
 ```
 
@@ -137,7 +139,7 @@ You can specify multiple subscriptions, and use custom functions for the value
 ```html
 <div 
   tendon-subscribe="model.sync,model.change:property,state.change:username change:group" 
-  tendon-set-value="model:someFunction"
+  tendon-set="model:someFunction"
 ></div>
 ```
 
@@ -148,7 +150,7 @@ is a one-way binding as there is no `tendon-publish` attribute and no way to get
 a value. The attributes here do the following:
 
 1. Bind content changes to an attribute, `class` in this case, using `tendon-set-attribute`
-2. Use the specific value, `model:status` aka `model.get('status')`, using `tendon-set-value`
+2. Use the specific value, `model:status` aka `model.get('status')`, using `tendon-set`
 3. Trigger a content update on `model.change:locked` aka `model.on('change:status')`
 
 Using this setup, anytime the model's `status` attribute changes, the DOM element 
@@ -156,7 +158,7 @@ will update its `class` attribute with that value.
 
 ```html
 <div 
-  tendon-set-value="model:status" 
+  tendon-set="model:status" 
   tendon-set-attribute="class"
   tendon-subscribe="model.change:status"
 />
@@ -167,7 +169,7 @@ Here we are going to use templates and publishing to setup two way binding.
 1. Listen to the `model` events; `sync`, `change:menuItems`, and `change:activeItem`
 2. Update the innerHTML content using the results of the template from `tendon-template` attribute.
    The template will be called with the `context` provided on initialization
-3. Listen to all child `li` element changes via the `tendon-listen-to` attribute
+3. Listen to all child `li` element changes via the `tendon-listen` attribute
 4. Publish any changes found by setting the `model:activeItem` prop, aka `model.set('activeItem')`
 5. Trigger an render on initialization via `tendon-auto-render`
 
@@ -184,7 +186,7 @@ Here we are going to use templates and publishing to setup two way binding.
   tendon-subscribe="model.sync, model.change:menuItems, model.change:activeItem"
   tendon-auto-render="true"
   tendon-template="script#my-list-template"
-  tendon-listen-to="li"
+  tendon-listen="li"
   tendon-publish="model:activeItem"
 ><!-- filed in by Tendon using template above --></ul>
 ```
@@ -197,9 +199,9 @@ HTML Attribute Options
 * `tendon-publish` {String} list of model events to publish HTML changes to
 * `tendon-auto-render` {Boolean} flag to signal initial rendering call, use if the data already exists in the `context` and the page was not bootstrapped with content
 * `tendon-template` {String} jQuery selector for underscore template, if set this will be run with the provided `context` and set as the inner HTML
-* `tendon-set-value` {String} model attribute or method to be used as direct value
+* `tendon-set` {String} model attribute or method to be used as direct value
 * `tendon-set-attribute` {String} element attribute to assign value to, innerHTML is set if not specified
-* `tendon-listen-to` {String} jQuery selector to specify a child element(s) to listen for changes, instead of the current element
+* `tendon-listen` {String} jQuery selector to specify a child element(s) to listen for changes, instead of the current element
 * `tendon-uuid` {String} internally set UUID to identify source of HTML update events
 
 
@@ -207,8 +209,12 @@ HTML Attribute Options
 Events
 ------
 
-* `updateElement`
-* `updateElement:id`
+* `init:before`
+* `init`
+* `init:after`
+* `change:html:id`
+* `change:html`
+* `change:js`
 
 
 
@@ -258,114 +264,107 @@ var App = Backbone.View.extend({
 }
 ```
 
-### instance.log(args, ...)
+### instance.setup()
 
-Simple wrapper around `console.log`, shorts out if not in `debug` mode
-
-```js
-tendon.log('the time is %d', Date.now())
-```
-
-
-### instance.getTemplate(args, ...)
-
-Find an embedded underscore template within the current DOM context, create and 
-return a template method using the current `templateSettings`. This is triggered 
-by an element containing the `tendon-template="selector"` attribute.
-
-* `selector` - jQuery selector string of template
+Search the current `$selector` for any elements with attributes matching any of 
+the adapters in use. Create event proxies to run the adapters.
 
 ```js
-var tmpl = tendon.getTemplate('script#my-list-template')
+tendon.setup()
 ```
 
+Adapters
+--------
 
-### instance.getValue(args, ...)
+### get
+
+* event - `init:before`
+* attr - `tendon-get`
+* value - any jQuery object method or prop. (ex: `data`, `val`, `html`)
+* autoload - `true`
 
 Description
 
-* `arg` - description
 
-```js
-example
-```
+### template
 
-
-### instance.updateElement(args, ...)
-
-Description
-
-* `arg` - description
-
-```js
-example
-```
-
-
-### instance.setupPublish(args, ...)
+* event - `change:js`
+* attr - `tendon-template`
+* value - jQuery selector of underscore template
+* autoload - `true`
 
 Description
 
-* `arg` - description
 
-```js
-example
-```
+### set
 
-
-### instance.onHTMLChange(args, ...)
-
-Description
-
-* `arg` - description
-
-```js
-example
-```
-
-
-### instance.setupSubscribe(args, ...)
+* event - `change:js`
+* related - [set-attribute](#setattribute)
+* attr - `tendon-set`
+* value - context method or property (ex: `obj.prop`, `model.get:prop`, `obj.method:arg1,arg2`)
+* autoload - `true`
 
 Description
 
-* `arg` - description
 
-```js
-example
-```
+### set-attribute
 
-
-### instance.onJSChange(args, ...)
-
-Description
-
-* `arg` - description
-
-```js
-example
-```
-
-
-### instance.setup(args, ...)
+* required adapter - [set](#set)
+* event - `change:js`
+* attr - `tendon-set`
+* value - element attribute (ex: `class`, `data-thing`, `selected`)
+* autoload - `true`
 
 Description
 
-* `arg` - description
 
-```js
-example
-```
+### auto-render
 
-
-### instance.id(args, ...)
+* required adapter - [set](#set) or [template](#template)
+* event - `init:after`
+* attr - `tendon-auto-render`
 
 Description
 
-* `arg` - description
 
-```js
-example
-```
+### uuid
+
+* event - `init`
+* attr - `tendon-uuid`
+* value - underscore uuid with prefix (ex: `tendon-25`)
+* autoload - `true`
+
+Description
+
+
+### publish
+
+* event - `change:html`
+* attr - `tendon-publish`
+* value - 
+
+Description
+
+
+### listen
+
+* event - `init`
+* attr - `tendon-listen`
+* value - child element selector (optional, default current el)
+* autoload - `true`
+
+Description
+
+
+### subscribe
+
+* event - `init`
+* attr - `tendon-subscribe`
+* value - 
+* autoload - `true`
+
+Description
+
 
 
 License

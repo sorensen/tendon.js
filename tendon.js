@@ -6,6 +6,7 @@
  */
 
 // TODO: Verify on-change detection for all HTML element types
+// TODO: make this operate without Backbone
 
 ;(function() {
 'use strict'
@@ -14,9 +15,29 @@
  * Module dependencies.
  */
 
-var Backbone = this.Backbone
-  , _ = this._
-  , $ = this.$
+var Backbone, _, $, debug
+  , slice = Array.prototype.slice
+
+// Check for common.js support
+if (typeof require !== 'undefined') {
+  Backbone = require('backbone')
+  _ = require('underscore')
+  $ = require('jquery')
+  debug = require('debug')('tendon')
+
+  debug = function() {
+    console.log.apply(console, arguments)
+  }
+
+// Fall back to the root object (window)
+} else {
+  Backbone = this.Backbone
+  _ = this._
+  $ = this.$
+  debug = function() {
+    console.log.apply(null, arguments)
+  }
+}
 
 /**
  * Tendon constructor
@@ -32,9 +53,9 @@ var Backbone = this.Backbone
  *   `tendon-publish` {String} list of model events to publish HTML changes to
  *   `tendon-auto-render` {Boolean} flag to signal initial rendering call, use if the data already exists in the `context` and the page was not bootstrapped with content
  *   `tendon-template` {String} jQuery selector for underscore template, if set this will be run with the provided `context` and set as the inner HTML
- *   `tendon-set-value` {String} model attribute or method to be used as direct value
+ *   `tendon-set` {String} model attribute or method to be used as direct value
  *   `tendon-set-attribute` {String} element attribute to assign value to, innerHTML is set if not specified
- *   `tendon-listen-to` {String} jQuery selector to specify a child element(s) to listen for changes, instead of the current element
+ *   `tendon-listen` {String} jQuery selector to specify a child element(s) to listen for changes, instead of the current element
  *   `tendon-uuid` {String} internally set UUID to identify source of HTML update events
  *
  * Example usage:
@@ -52,9 +73,9 @@ var Backbone = this.Backbone
  *     tendon-publish="sessionModel:menuItem"
  *     tendon-auto-render="true"
  *     tendon-template="script#my-list-template"
- *     tendon-set-value="false"
+ *     tendon-set="false"
  *     tendon-set-attribute=""
- *     tendon-listen-to="li"
+ *     tendon-listen="li"
  *     tendon-uuid="tendon-3"
  *   />
  *
@@ -63,48 +84,37 @@ var Backbone = this.Backbone
  */
 
 function Tendon($selector, context, options) {
-  this.log('[Tendon.init]')
-
-  var self = this
-
   _.extend(this, Backbone.Events)
 
   // Cache selector, create jQuery context if string provided
-  this.$selector = typeof $selector === 'string' ? $($selector) : $main
+  this.$selector = typeof $selector === 'string' ? $($selector) : $selector
   this.context = context || {}
-  this.options = _.extend({}, Tendon.defaults, options || {})
+  
+  var opt = this.options = _.extend({}, Tendon.defaults, options || {})
+  this.prefix = opt.prefix
 
-  var pre = this.options.prefix
+  debug('[Tendon.init]', $selector, context, opt)
 
-  // Find all HTML elements with tendon-based properties, 
-  // run each element found through setup process
-  var $found = $selector.find([
-    'template'
-  , 'set-value'
-  , 'set-attribute'
-  , 'listen-to'
-  , 'auto-render'
-  , 'publish'
-  , 'subscribe'
-  ].map(function(prop) {
-    return pre + prop
-  }).join(','))
+  this.adapters = _.extend({}, Adapters, opt.adapters || {})
+  this.setup()
 
-  $found.each(function(i, el) {
-    self.setup(el)
-  })
+  // Trigger the init with before and after hooks for 
+  // controlling adapter ordering
+  this.trigger('init:before')
+  this.trigger('init')
+  this.trigger('init:after')
 }
 
 /*!
  * Default class settings
  */
 
-Tendon.defaults = Object.freeze({
+Tendon.defaults = {
   // DOM attribute prefix
   prefix: 'tendon-'
 
   // Debug mode to enable logging
-, debug: false
+, debug: true
 
   // Simple template settings. {{ }} vs <% %>
 , templateSettings: {
@@ -113,19 +123,184 @@ Tendon.defaults = Object.freeze({
   , interpolate: /\{\{=(.+?)\}\}/g
   , escape:      /\{\{-(.+?)\}\}/g
   }
-})
+}
 
 /**
- * Logging helper, send to console if `debug` mode is enabled
+ * Setup JS to HTML change subscriptions
  *
- * @param {Any} args to send to `console.log`
+ *
  * @chainable
  */
 
-Tendon.prototype.log = function() {
-  if (!this.options.debug) return this
-  console.log.apply(console, arguments)
+Tendon.prototype.setup = function() {
+  var self = this
+    , pre = this.prefix
+    , adapterNames = Object.keys(this.adapters)
+
+  // Find all elements that contain an attribute matching any 
+  // adapter currently enabled
+  var selector = adapterNames.map(function(name) {
+    return '[' + pre + name + ']'
+  }).join(',')
+
+  this.$selector.find(selector).each(function(i, el) {
+    var $el = $(el)
+      , attrs = {}
+
+    // Build the attribute object
+    slice.call(el.attributes).forEach(function(item) {
+      attrs[item.name] = item.value
+    })
+
+    // Find all autoloading adapters, these should be called 
+    // regardless if the element contains the attribute, note: 
+    // this requires at least one other tag to be discovered on init
+    adapterNames.filter(function(name) {
+      var al = self.adapters[name].autoload
+      return _.isFunction(al) 
+        ? al.apply(self, [$el, attrs])
+        : al
+
+    // Tack on `autoload` adapters to be included in logic below
+    }).forEach(function(name) {
+      if (!attrs[pre + name]) attrs[pre + name] = null
+    })
+
+    // Find all tendon specific attributes
+    Object.keys(attrs).filter(function(attr) {
+      return attr.indexOf(pre) === 0
+    
+    // Strip prefix from the name
+    }).map(function(attr) {
+      return attr.replace(pre, '')
+    
+    // Ensure we have an adapter for the attribute
+    }).filter(function(name) {
+      return self.adapters.hasOwnProperty(name)
+    
+    // Bind each adapter to the element for the given event, 
+    // `init` will be used as a default if none provided
+    }).forEach(function(name) {
+      var adapter = self.adapters[name]
+        , val = attrs[pre + name]
+        , event = adapter.event || 'init'
+        , method = _.isFunction(adapter) ? adapter : adapter.method 
+
+      debug('[Tendon.enable] adapter=`%s` event=`%s`', name, event)
+
+      // Setup event proxy
+      self.on(event, function() {
+        // Init events don't have a normal context, use the current 
+        // element and the value of the adapter attribute
+        if (event.indexOf('init') === 0) {
+          method.apply(self, [$el, val, name])
+        // Pass through whatever was sent by this event
+        } else {
+          method.apply(self, arguments)
+        }
+      })
+    })
+  })
+
   return this
+}
+
+Tendon.prototype.ctx = function(path, value, args2) {
+  var parts = path.split('.')           // object.prop1.prop2
+    , last = parts.pop()                // lastProp:event:event2, event:event3
+    , command = (last || '').split(':') // the first `:` indicates prop to argument 
+    , prop = command[0]                 // we only care about the first `:` found
+    , rest = command.slice(1).join(':') // piece the arg section back together
+    , args = rest.split(',')            // arguments are comma seperated
+
+  // Support nested dot notation
+  var target = this.context
+
+  // Follow the property chain to the end
+  for (var i = 0; i < parts.length; i++) {
+    var part = parts[i]
+    if (!value && !target.hasOwnProperty(part)) {
+      console.error('[Adapters.set] Invalid context: `%s`', parts.join('.'))
+      return null
+    }
+    // ensure placeholder object for setting key / val 
+    target[part] || (target[part] = {})
+    target = target[part]
+  }
+
+  // Remove any trailing whitespace
+  args = args.map(function(x) {
+    return x.trim()
+  })
+
+  // Check if this is a callable property
+  if (_.isFunction(from[prop])) {
+    if (value) {
+      // Use the value as first argument for assignment call, 
+      // `model.set:property` -> model.set('property', value)
+      return from[prop].apply(from, [value].concat(args))
+    }
+    // Return results of call, 
+    // `model.get:foo,2` -> model.get('foo', 2)
+    return from[prop].apply(from, args)
+  }
+
+  // Normal object usage, key -> value
+  if (value) {
+    return from[prop] = value
+  }
+  return from[prop]
+}
+
+/*!
+ * Built-in adapters
+ */
+
+var Adapters = {}
+
+/**
+ *
+ *
+ * @param {Object} jQuery selector
+ * @param {String} html get directive (auto|data|val|html)
+ */
+
+Adapters.get = {
+  event: 'init:before'
+, autoload: true
+, method: function($el, get) {
+    var listenTo = $el.attr(this.prefix + 'listen')
+      , cmd = (get || '').split(':')
+      , prop = cmd.pop()
+      , selector = cmd[0]
+      , $target = selector ? $el.find(selector) : $el
+
+    $el.tendonGet = function(e) {
+      // Check for specific jQuery property / method to use
+      if (get && $target.hasOwnProperty(prop)) {
+        return _.isFunction($target[prop])
+          ? $target[prop]()
+          : $target[prop]
+      }
+
+      // Check for input type, we generally always want the value
+      if ($el.is('input, select, textarea')) {
+        return $el.val()
+      }
+
+      // Check for associated data
+      if (e && listenTo) {
+        var $target = $(e.target).closest(listenTo)
+          , data = $target.data()
+
+        if (!_.isEmpty(data)) return data
+      }
+
+      // Use the inner contents as default
+      return $target.html()
+    }
+    return this
+  }
 }
 
 /**
@@ -136,82 +311,244 @@ Tendon.prototype.log = function() {
  * @return {Function} template function
  */
 
-Tendon.prototype.getTemplate = function(selector) {
-  this.log('[Tendon.getTemplate] selector=`%s`', selector)
+Adapters.template = {
+  event: 'change:js'
+, method: function($el, model, changed, options) {
+    var selector = $el.attr(this.prefix + 'template')
+      , tmpl
 
-  var $tmpl = this.$main.find(selector)
-    , str = $tmpl.html()
+    // Check if called directly against invalid `$el`
+    if (!selector) return this
 
-  if (!str) {
-    throw new Error('Invalid template: ' + selector)
+    debug('[Adapters.template] selector=`%s`', selector)
+
+    // Create caching store if needed
+    if (!this._cache) this._cache = {}
+
+    var tmpl = this._cache[selector]
+
+    // Lookup and cache the template
+    if (!tmpl) {
+      var str = this.$selector.find(selector).html()
+        , fn = _.template(str, this.options.templateSettings)
+
+      tmpl = this._cache[selector] = fn
+    }
+
+    if (!tmpl) throw new Error('Invalid template: ' + selector)
+
+    var val = tmpl(this.context)
+
+    if ($el.is('input, textarea')) {
+      $el.val(val)
+    } else {
+      $el.html(val)
+    }
+    return this
   }
-  return _.template(str, this.options.templateSettings)
 }
 
 /**
- * Get the Backbone value for a given element defined in the 
- * `tendon-set-value` attribute. Can be direct property or method.
+ * Get the context value for a given element defined in the 
+ * `tendon-set` attribute. Can be direct property or method.
  *
  * Example:
  *
- *   method: <div tendon-set-value="model:getSites" />
- *   property: <div tendon-set-value="model:sites" />
+ *   property: <div tendon-set="model.attributes" />
+ *   property: <div tendon-set="model.get:sites" />
  *
  * @param {Object} jQuery selector
  * @return {Any} model value
  */
 
-Tendon.prototype.getValue = function($el) {
-  var setValue = $el.attr(this.prefix + 'set-value')
-    , split = setValue.split(':')
-    , from = this.context[split[0]]
-    , prop = split[1]
+Adapters.set = {
+  event: 'change:js'
+, children: [
+    'set-attribute' // not a thing.. yet..
+  ]
+, method: function($el, model, changed, options) {
+    var pre = this.prefix
+      , setValue = $el.attr(pre + 'set') || ''
+      , setAttr = $el.attr(pre + 'set-attribute')
+      , split = setValue.split('.')  // object.prop1.prop2
+      
+      , cmd = split.pop().split(':') // method:arg1,arg2,arg3
+      , prop = cmd[0]
+      , args = (cmd[1] || '').split(',') // TODO: Trim whitespace around the args
 
-  if (_.isFunction(from[prop])) return from[prop]() // 'model:getSites'
-  return from.get(prop) // model:sites
+
+    // Support nested dot notation
+    var from = this.context
+
+    // Follow the property chain to the end
+    for (var i = 0; i < split.length; i++) {
+      var name = split[i]
+      if (!from.hasOwnProperty(name)) {
+        console.error('[Adapters.set] Invalid context: `%s`', split.join('.'))
+        return this
+      }
+      from = from[name]
+    }
+
+    // TODO: Change the set format to `object.property:argument`
+    // so that simple object reference can be used. Backbone models
+    // would then use `model.get:property` to still work
+
+    debug('[Adapters.set] value=`%s` attr=`%s`', setValue, setAttr, $el)
+
+    // Check if called directly against invalid `$el`
+    if (!setAttr && !setValue) return this
+
+    // if (!from) return console.error('[Adapters.set] Invalid context, name=`%s`', name)
+    // if (!from.hasOwnProperty(prop)) return console.error('[Adapters.set] Invalid property, name=`%s` prop=`%s`', name, prop)
+
+    var val = _.isFunction(from[prop])
+      ? from[prop].apply(from, args) // model.method:arguments
+      : from[prop]                   // object.property
+
+    if (setAttr) {
+      $el.attr(setAttr, val || '')
+    } else {
+      if ($el.is('input, textarea')) {
+        $el.val(val)
+      } else {
+        $el.html(val)
+      }
+    }
+    return this
+  }
 }
 
 /**
- * Setup JS to HTML change subscriptions
+ * Attempt to auto render HTML from JS after primary adapters loaded
  *
- *
- * @chainable
+ * @param {Object} jQuery selector
  */
 
-Tendon.prototype.updateElement = function($el) {
-  var pre = this.prefix
-    , tmpl = $el.attr(pre + 'template')
-    , setValue = $el.attr(pre + 'set-value')
-    , setAttr = $el.attr(pre + 'set-attribute')
-    , id = $el.attr('id')
+Adapters['auto-render'] = {
+  event: 'init:after'
+, method: function($el) {
+    var self = this
 
-  this.log('[Tendon.updateElement] id=`%s`', id)
-
-  if (tmpl) tmpl = this.getTemplate(tmpl)
-
-  // Get the new value to use from either the template, 
-  // or the specified direct value from an object in the context
-  var tmp
-  if (tmpl) tmp = tmpl(this.context)
-  else if (setValue) tmp = this.getValue($el)
-
-  // Update the element
-  if (setAttr) {
-    $el.attr(setAttr, tmp || '')
-  } else if (tmpl) {
-    $el.html(tmp)
-  } else if ($el.is('input, select, textarea')) {
-    $el.val(tmp)
-  } else {
-    $el.html(tmp)
+    // Call each built in rendering adapter
+    ;['set'
+    , 'template'
+    ].forEach(function(name) {
+      if (self.adapters[name]) {
+        self.adapters[name].method.apply(self, [$el])
+      }
+    })
+  
+    return this
   }
-  if (id) {
-    this.log('[Tendon.updateElement] id=' + id, $el)
-    this.trigger('updateElement:' + id, $el, tmp)
-  }
+}
 
-  this.trigger('updateElement', $el, tmp)
-  return this
+/**
+ * TODO: Test this
+ *
+ * Bind subscribe and publish
+ *
+ * Example:
+ *
+ *   <div tendon-bind="model.property" />
+ *
+ * Instead Of:
+ *
+ *   <div 
+ *     tendon-subscribe="model.change:property"
+ *     tendon-publish="model.property"
+ *   />
+ *
+ * @param {Object} jQuery selector
+ */
+
+Adapters.bind = {
+  event: 'init:after'
+, method: function($el, bind) {
+    var self = this
+
+    bind.split(',').forEach(function(b) {
+      var cmd = b.split('.')
+        , name = cmd[0]
+        , prop = cmd[1]
+        , subject = self.context[name]
+
+      var sub = name + '.change:' + prop
+
+      self.adapters.subscribe.method.apply(self, [$el, sub])
+      self.adapters.publish.method.apply(self, [$el, b])
+    })
+  
+    return this
+  }
+}
+
+/**
+ * Find the UUID of a given element, create a new one if one is
+ * not found, used to prevent circular update logic.
+ *
+ * Example:
+ *
+ *   <div tendon-uuid="12305982-ab23" />
+ *
+ * @param {Object} jQuery element
+ * @param {String} bootstrapped or internal uuid (optional)
+ */
+
+Adapters.uuid = {
+  event: 'init'
+, autoload: true
+, method: function($el, uuid) {
+    var pre = this.prefix
+      , q = pre + 'uuid'
+
+    // Add a uuid value if none found
+    if (!uuid) $el.attr(q, _.uniqueId(pre))
+    return this
+  }
+}
+
+/**
+ * Listen for html changes, then, update the designated context with the 
+ * new element value
+ *
+ * @param {Object} jQuery element
+ * @param {Any} new html value
+ * @param {Object} js event
+ * @param {Object|Null} child element if using custom `listen` attribute
+ */
+
+Adapters.publish = {
+  event: 'change:html'
+, method: function($el, val, e) {
+    var self = this
+      , pre = this.prefix
+      , pubs = $el.attr(pre + 'publish')
+      , uuid = $el.attr(pre + 'uuid')
+
+    // TODO: follow the same value syntax as the `set` adapter, either do 
+    // object assignment, or, if a method, call the same way except use the 
+    // value found as the first argument (or last? idk)
+
+    pubs.split(',').forEach(function(pub) {
+      var cmd = pub.split(':')
+        , subject = self.context[cmd[0]]
+        , prop = cmd[1]
+
+      if (!subject) {
+        return console.error('[Adapters.publish] invalid subject: `%s`', cmd[0], $el)
+      }
+
+      // TODO: be agnostic about backbone, only gets tricky with the 'source' 
+      // option since we need that, otherwise could just be a attr val of `object.method:first-arg`
+      //
+      // Set the Backbone model value, sending the current HTML element 
+      // UUID as the source to prevent circular update logic
+      subject.set(prop, val, { source: uuid })
+    })
+      
+    return this
+  }
 }
 
 /**
@@ -223,80 +560,54 @@ Tendon.prototype.updateElement = function($el) {
  * Example:
  *
  *   <input tendon-publish="model:property" />
- *   <ul tendon-listen-to="li" />
+ *   <ul tendon-listen="li" />
  *
  * @param {Object} jQuery selector
+ * @param {String} child element selector
  * @chainable
  */
 
-Tendon.prototype.setupPublish = function($el) {
-  var self = this
-    , pre = this.prefix
-    , pubs = $el.attr(pre + 'publish')
-    , listenTo = $el.attr(pre + 'listen-to')
+Adapters.listen = {
+  event: 'init'
 
-  if (!pubs) return this
+  // Autoload this adapter only if the element has a `publish`
+  // property, assume that we want to listen for changes
+, autoload: function($el, attributes) {
+    var pre = this.prefix
 
-  // Form input element, listen to the `change` event
-  if ($el.is('input, select, textarea')) {
-    $el.on('change', function() {
-      self.onHTMLChange($el)
-    })
-  // Custom `listenTo` attribute, bind to `click` event
-  } else if (listenTo) {
-    $el.on('click', listenTo, function(e) {
-      var $child = $(e.target).closest(listenTo)
-
-      self.onHTMLChange($el, $child)
-    })
-  // Default listen mode, bind to `click` event
-  } else {
-    $el.on('click', function() {
-      self.onHTMLChange($el)
-    })
+    return attributes.hasOwnProperty(pre + 'publish')
   }
-  return this
-}
+, method: function($el, listenTo) {
+    var self = this
+      , id = $el.attr('id')
 
-/**
- * HTML change handler
- *
- * Example:
- *
- *   <ul 
- *     tendon-publish="model:menuItem" 
- *     tendon-listen-to="li"
- *   />
- *
- * @chainable
- */
+    // Check if specifically disabled
+    if (listenTo === 'false') return this
 
-Tendon.prototype.onHTMLChange = function($el, $child) {
-  var self = this
-    , pre = this.prefix
-    , $target = $child || $el
-    , pubs = $el.attr(pre + 'publish') || ''
-    , listenTo = $el.attr(pre + 'listen-to')
-    , uuid = this.id($el)
+    function broadcast(e) {
+      var val = $el.tendonGet(e)
 
-  // TODO: Verify the `html` vs. `data` method usage here is correct
-  var val
-  if ($target.is('input, select, textarea')) val = $target.val()
-  else if (listenTo) val = $target.data()
-  else val = $target.html()
+      debug('[Adapters.listen] triggering `change:html` event id=`%s` el=', id, $el)
 
-  this.log('[Tendon.onHTMLChange] value=`%s` publish=`%s` $el=`%s`', val, pubs, $el)
+      if (id) self.trigger('change:html:' + id, $el, val, e)
+      self.trigger('change:html', $el, val, e)
+      return this
+    }
 
-  pubs.split(',').forEach(function(pub) {
-    var cmd = pub.split(':')
-      , subject = self.context[cmd[0]]
-      , prop = cmd[1]
-
-    // Set the Backbone model value, sending the current HTML element 
-    // UUID as the source to prevent circular update logic
-    subject.set(prop, val, { source: uuid })
-  })
-  return this
+    // Form input element, listen to the `change` event
+    if ($el.is('input, select, textarea')) {
+      $el.on('change', broadcast)
+    // Custom `listenTo` attribute, bind to `click` event
+    } else if (listenTo) {
+      // TODO: this kinda sucks...
+      $el.on('click', listenTo, broadcast)
+    // Default listen mode, bind to `click` event
+    } else {
+      // TODO: should this be specified by an attribute?
+      $el.on('click', broadcast)
+    }
+    return this
+  }
 }
 
 /**
@@ -310,109 +621,43 @@ Tendon.prototype.onHTMLChange = function($el, $child) {
  *   <div tendon-subscribe="state.change:version" />
  *
  * @param {Object} jQuery selector
+ * @param {String} context subscriptions
  * @chainable
  */
 
-Tendon.prototype.setupSubscribe = function($el) {
-  var self = this
-    , subs = $el.attr(this.prefix + 'subscribe') || ''
+Adapters.subscribe = {
+  event: 'init'
+, method: function($el, subs) {
+    var self = this
+      , pre = this.prefix
 
-  subs.split(',').forEach(function(sub) {
-    var cmd = sub.split('.')
-      , name = cmd[0]
-      , event = cmd[1]
-      , subject = self.context[name]
+    subs.split(',').forEach(function(sub) {
+      var cmd = sub.split('.')
+        , name = cmd[0]
+        , event = cmd[1]
+        , subject = self.context[name]
 
-    if (!subject) {
-      throw new Error('Invalid subject: ' + sub)
-    }
-    self.log('[Tendon.setupSubscribe] obj=`%s` event=`%s` id=`%s`', name, event, $el.attr('id'))
+      // TODO: Normalize the value notation to work like the `set` adapter
 
-    subject.on(event, function(model, changed, options) {
-      self.onJSChange($el, model, changed, options)
+
+      // TODO: Determine if we should throw here or log, maybe add a `strict` mode?
+      if (!subject) {
+        return console.error('[Adapters.subscribe] Invalid subject=`%s`', sub, self.context, $el)
+      }
+      debug('[Adapters.subscribe] obj=`%s` event=`%s` id=`%s`', name, event, $el.attr('id'))
+
+      subject.on(event, function(model, changed, options) {
+        var uuid = $el.attr(pre + 'uuid')
+        
+        // Ensure the event was triggered outside of this lib to prevent circles
+        if (options && options.source === uuid) {
+          return
+        }
+        self.trigger('change:js', $el, model, changed, options)
+      })
     })
-  })
-  return this
-}
-
-/**
- * JS triggered change, ensure the source of the event is not the 
- * element we are about to update
- *
- * @param {Object} jQuery selector
- * @param {Object} Backbone model
- * @param {Object} changed attributes hash
- * @param {Object} change event options
- */
-
-Tendon.prototype.onJSChange = function($el, model, changed, options) {
-  var uuid = this.id($el)
-
-  // Short out if the element was the original trigger
-  if (options && options.source === uuid) return this
-
-  return this.updateElement($el)
-}
-
-/**
- * Element setup, find all custom HTML attributes for a given element
- * and run it through all sub-setup processes
- *
- * Example:
- *
- *   <div tendon-subscribe="model.change:property change:author" />
- *   <div tendon-publish="model:property" />
- *   <div tendon-auto-render="true" />
- *
- * @param {Object} jQuery element
- * @chainable
- */
-
-Tendon.prototype.setup = function(el) {
-  var $el = $(el)
-    , pre = this.prefix
-    , id = $el.attr('id')
-    , subs = $el.attr(pre + 'subscribe')
-    , pubs = $el.attr(pre + 'publish')
-    , auto = $el.attr(pre + 'auto-render')
-
-    // , tmpl = $el.attr(pre + 'template')
-    // , setValue = $el.attr(pre + 'set-value')
-    // , setClass = $el.attr(pre + 'set-class')
-    // , listenTo = $el.attr(pre + 'listen-to')
-    // , uuid = this.id($el)
-
-  this.log('[Tendon.setup] id=`%s` subs=`%s` pubs=`%s` auto=`%s`', id, subs, pubs, auto)
-
-  // Check for initial auto-render
-  if (auto) this.updateElement($el)
-  if (subs) this.setupSubscribe($el)
-  if (pubs) this.setupPublish($el)
-
-  return this
-}
-
-/**
- * Find the UUID of a given element, create a new one if one is
- * not found, used to prevent circular update logic.
- *
- * Example:
- *
- *   <div tendon-uuid="12305982-ab23" />
- *
- * @param {Object} jQuery element
- * @return {String} uuid
- */
-
-Tendon.prototype.id = function($el) {
-  var q = this.prefix + 'uuid'
-    , uuid = $el.attr(q)
-
-  if (!uuid) {
-    uuid = _.uniqueId(this.prefix)
-    $el.attr(q, uuid)
+    return this
   }
-  return uuid
 }
 
 /*!
