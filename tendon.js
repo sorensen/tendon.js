@@ -318,8 +318,9 @@ Adapters.get = {
 
       // Check for associated data
       if (e && listenTo) {
-        var $target = $(e.target).closest(listenTo)
-          , data = $target.data()
+        $target = $(e.target).closest(listenTo)
+        
+        var data = $target.data()
 
         if (!_.isEmpty(data)) return data
       }
