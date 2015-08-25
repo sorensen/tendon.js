@@ -26,7 +26,7 @@ if (typeof require !== 'undefined') {
   debug = require('debug')('tendon')
 
   debug = function() {
-    console.log.apply(console, arguments)
+    // console.log.apply(console, arguments)
   }
 
 // Fall back to the root object (window)
@@ -84,6 +84,8 @@ if (typeof require !== 'undefined') {
  */
 
 function Tendon($selector, context, options) {
+  var self = this
+
   _.extend(this, Backbone.Events)
 
   // Cache selector, create jQuery context if string provided
@@ -100,9 +102,9 @@ function Tendon($selector, context, options) {
 
   // Trigger the init with before and after hooks for 
   // controlling adapter ordering
-  this.trigger('init:before')
-  this.trigger('init')
-  this.trigger('init:after')
+  setTimeout(function() { self.trigger('init:before') }, 0)
+  setTimeout(function() { self.trigger('init') }, 0)
+  setTimeout(function() { self.trigger('init:after') }, 0)
 }
 
 /*!
@@ -118,7 +120,7 @@ Tendon.defaults = {
 
   // Simple template settings. {{ }} vs <% %>
 , templateSettings: {
-    variable:    '__'
+    variable:    'data'
   , evaluate:    /\{\{(.+?)\}\}/g
   , interpolate: /\{\{=(.+?)\}\}/g
   , escape:      /\{\{-(.+?)\}\}/g
@@ -143,6 +145,7 @@ Tendon.prototype.setup = function() {
     return '[' + pre + name + ']'
   }).join(',')
 
+  // this.$selector.find('[tendon-template]:first-child').each(function(i, el) {
   this.$selector.find(selector).each(function(i, el) {
     var $el = $(el)
       , attrs = {}
@@ -151,6 +154,10 @@ Tendon.prototype.setup = function() {
     slice.call(el.attributes).forEach(function(item) {
       attrs[item.name] = item.value
     })
+
+    // Storage container for active adapters and events
+    $el._tendon = {}
+    $el._events = {}
 
     // Find all autoloading adapters, these should be called 
     // regardless if the element contains the attribute, note: 
@@ -186,10 +193,17 @@ Tendon.prototype.setup = function() {
         , event = adapter.event || 'init'
         , method = _.isFunction(adapter) ? adapter : adapter.method 
 
-      debug('[Tendon.enable] adapter=`%s` event=`%s`', name, event)
+      debug('[Tendon.enable] adapter=`%s` event=`%s` el=`%s`', name, event, attrs.id)
+      
+      // Store adapter and event information on the element
+      $el._tendon[name] = adapter
+      $el._events[event] || ($el._events[event] = [])
+      $el._events[event].push(method)
 
       // Setup event proxy
       self.on(event, function() {
+        console.log('[trigger] adapter=`%s` event=`%s` el=`%s`', name, event, attrs.id, arguments)
+        
         // Init events don't have a normal context, use the current 
         // element and the value of the adapter attribute
         if (event.indexOf('init') === 0) {
@@ -202,54 +216,67 @@ Tendon.prototype.setup = function() {
     })
   })
 
+  console.log('[Tendon.enable] setup complete')
+
   return this
 }
 
-Tendon.prototype.ctx = function(path, value, args2) {
+/**
+ *
+ *
+ */
+
+Tendon.prototype.ctx = function(path, value) {
+  if (!path) return null
+
   var parts = path.split('.')           // object.prop1.prop2
     , last = parts.pop()                // lastProp:event:event2, event:event3
     , command = (last || '').split(':') // the first `:` indicates prop to argument 
     , prop = command[0]                 // we only care about the first `:` found
     , rest = command.slice(1).join(':') // piece the arg section back together
-    , args = rest.split(',')            // arguments are comma seperated
+    , cmdArgs = rest.split(',')         // arguments are comma seperated
+    , directArgs = slice.call(arguments, 1)
 
   // Support nested dot notation
   var target = this.context
 
+  // Return direct value if it is not part of the context
+  if (!parts.length && !target.hasOwnProperty(last)) {
+    return path
+  }
+
   // Follow the property chain to the end
   for (var i = 0; i < parts.length; i++) {
     var part = parts[i]
-    if (!value && !target.hasOwnProperty(part)) {
+    // if (!value && !target.hasOwnProperty(part)) {
+    if (!target.hasOwnProperty(part)) {
       console.error('[Adapters.set] Invalid context: `%s`', parts.join('.'))
       return null
     }
     // ensure placeholder object for setting key / val 
-    target[part] || (target[part] = {})
+    // target[part] || (target[part] = {})
     target = target[part]
   }
 
   // Remove any trailing whitespace
-  args = args.map(function(x) {
+  cmdArgs = cmdArgs.map(function(x) {
     return x.trim()
   })
 
   // Check if this is a callable property
-  if (_.isFunction(from[prop])) {
-    if (value) {
-      // Use the value as first argument for assignment call, 
-      // `model.set:property` -> model.set('property', value)
-      return from[prop].apply(from, [value].concat(args))
-    }
-    // Return results of call, 
-    // `model.get:foo,2` -> model.get('foo', 2)
-    return from[prop].apply(from, args)
+  if (_.isFunction(target[prop])) {
+    var args = cmdArgs.concat(directArgs)
+
+    console.log('[ctx]: ', target, prop, args)
+
+    return target[prop].apply(target, args)
   }
 
   // Normal object usage, key -> value
   if (value) {
-    return from[prop] = value
+    return target[prop] = value
   }
-  return from[prop]
+  return target[prop]
 }
 
 /*!
@@ -273,6 +300,7 @@ Adapters.get = {
       , cmd = (get || '').split(':')
       , prop = cmd.pop()
       , selector = cmd[0]
+      // , selector = this.ctx(get)
       , $target = selector ? $el.find(selector) : $el
 
     $el.tendonGet = function(e) {
@@ -314,13 +342,16 @@ Adapters.get = {
 Adapters.template = {
   event: 'change:js'
 , method: function($el, model, changed, options) {
-    var selector = $el.attr(this.prefix + 'template')
+    var self = this
+      , template = $el.attr(this.prefix + 'template')
+      , id = $el.attr('id')
+      , selector = this.ctx(template)
       , tmpl
 
     // Check if called directly against invalid `$el`
     if (!selector) return this
 
-    debug('[Adapters.template] selector=`%s`', selector)
+    console.log('[Adapters.template] running: selector=`%s`', selector, arguments)
 
     // Create caching store if needed
     if (!this._cache) this._cache = {}
@@ -342,8 +373,14 @@ Adapters.template = {
     if ($el.is('input, textarea')) {
       $el.val(val)
     } else {
-      $el.html(val)
+      $el.html(val || '')
     }
+
+    // Trigger rendered event
+    setTimeout(function() {
+      if (id) self.trigger('render:html:' + id, $el, val, model, changed, options)
+      self.trigger('render:html', $el, val, model, changed, options)
+    }, 0)
     return this
   }
 }
@@ -367,44 +404,12 @@ Adapters.set = {
     'set-attribute' // not a thing.. yet..
   ]
 , method: function($el, model, changed, options) {
-    var pre = this.prefix
+    var self = this
+      , pre = this.prefix
+      , id = $el.attr('id')
       , setValue = $el.attr(pre + 'set') || ''
       , setAttr = $el.attr(pre + 'set-attribute')
-      , split = setValue.split('.')  // object.prop1.prop2
-      
-      , cmd = split.pop().split(':') // method:arg1,arg2,arg3
-      , prop = cmd[0]
-      , args = (cmd[1] || '').split(',') // TODO: Trim whitespace around the args
-
-
-    // Support nested dot notation
-    var from = this.context
-
-    // Follow the property chain to the end
-    for (var i = 0; i < split.length; i++) {
-      var name = split[i]
-      if (!from.hasOwnProperty(name)) {
-        console.error('[Adapters.set] Invalid context: `%s`', split.join('.'))
-        return this
-      }
-      from = from[name]
-    }
-
-    // TODO: Change the set format to `object.property:argument`
-    // so that simple object reference can be used. Backbone models
-    // would then use `model.get:property` to still work
-
-    debug('[Adapters.set] value=`%s` attr=`%s`', setValue, setAttr, $el)
-
-    // Check if called directly against invalid `$el`
-    if (!setAttr && !setValue) return this
-
-    // if (!from) return console.error('[Adapters.set] Invalid context, name=`%s`', name)
-    // if (!from.hasOwnProperty(prop)) return console.error('[Adapters.set] Invalid property, name=`%s` prop=`%s`', name, prop)
-
-    var val = _.isFunction(from[prop])
-      ? from[prop].apply(from, args) // model.method:arguments
-      : from[prop]                   // object.property
+      , val = this.ctx(setValue)
 
     if (setAttr) {
       $el.attr(setAttr, val || '')
@@ -415,6 +420,12 @@ Adapters.set = {
         $el.html(val)
       }
     }
+
+    // Trigger rendered event
+    setTimeout(function() { 
+      if (id) self.trigger('render:html:' + id, $el, val, model, changed, options)
+      self.trigger('render:html', $el, val, model, changed, options)
+    }, 0)
     return this
   }
 }
@@ -437,46 +448,6 @@ Adapters['auto-render'] = {
       if (self.adapters[name]) {
         self.adapters[name].method.apply(self, [$el])
       }
-    })
-  
-    return this
-  }
-}
-
-/**
- * TODO: Test this
- *
- * Bind subscribe and publish
- *
- * Example:
- *
- *   <div tendon-bind="model.property" />
- *
- * Instead Of:
- *
- *   <div 
- *     tendon-subscribe="model.change:property"
- *     tendon-publish="model.property"
- *   />
- *
- * @param {Object} jQuery selector
- */
-
-Adapters.bind = {
-  event: 'init:after'
-, method: function($el, bind) {
-    var self = this
-
-    bind.split(',').forEach(function(b) {
-      var cmd = b.split('.')
-        , name = cmd[0]
-        , prop = cmd[1]
-        , subject = self.context[name]
-
-      var sub = name + '.change:' + prop
-
-      self.adapters.subscribe.method.apply(self, [$el, sub])
-      self.adapters.publish.method.apply(self, [$el, b])
     })
   
     return this
@@ -526,25 +497,10 @@ Adapters.publish = {
       , pubs = $el.attr(pre + 'publish')
       , uuid = $el.attr(pre + 'uuid')
 
-    // TODO: follow the same value syntax as the `set` adapter, either do 
-    // object assignment, or, if a method, call the same way except use the 
-    // value found as the first argument (or last? idk)
-
-    pubs.split(',').forEach(function(pub) {
-      var cmd = pub.split(':')
-        , subject = self.context[cmd[0]]
-        , prop = cmd[1]
-
-      if (!subject) {
-        return console.error('[Adapters.publish] invalid subject: `%s`', cmd[0], $el)
-      }
-
-      // TODO: be agnostic about backbone, only gets tricky with the 'source' 
-      // option since we need that, otherwise could just be a attr val of `object.method:first-arg`
-      //
-      // Set the Backbone model value, sending the current HTML element 
-      // UUID as the source to prevent circular update logic
-      subject.set(prop, val, { source: uuid })
+    pubs.split('/').forEach(function(pub) {
+      self.ctx(pub, val, { 
+        source: uuid 
+      })
     })
       
     return this
@@ -589,8 +545,12 @@ Adapters.listen = {
 
       debug('[Adapters.listen] triggering `change:html` event id=`%s` el=', id, $el)
 
-      if (id) self.trigger('change:html:' + id, $el, val, e)
-      self.trigger('change:html', $el, val, e)
+      // if (id) self.trigger('change:html:' + id, $el, val, e)
+      var methods = $el._events['change:html'] || []
+      methods.forEach(function(method) {
+        method.apply(self, [$el, val, e])
+      })
+      // self.trigger('change:html', $el, val, e)
       return this
     }
 
@@ -631,29 +591,25 @@ Adapters.subscribe = {
     var self = this
       , pre = this.prefix
 
-    subs.split(',').forEach(function(sub) {
-      var cmd = sub.split('.')
-        , name = cmd[0]
-        , event = cmd[1]
-        , subject = self.context[name]
-
-      // TODO: Normalize the value notation to work like the `set` adapter
-
-
-      // TODO: Determine if we should throw here or log, maybe add a `strict` mode?
-      if (!subject) {
-        return console.error('[Adapters.subscribe] Invalid subject=`%s`', sub, self.context, $el)
-      }
-      debug('[Adapters.subscribe] obj=`%s` event=`%s` id=`%s`', name, event, $el.attr('id'))
-
-      subject.on(event, function(model, changed, options) {
+    subs.split('/').forEach(function(sub) {
+      self.ctx(sub, function(model, changed, options) {
         var uuid = $el.attr(pre + 'uuid')
         
         // Ensure the event was triggered outside of this lib to prevent circles
         if (options && options.source === uuid) {
           return
         }
-        self.trigger('change:js', $el, model, changed, options)
+        console.log('\n\ntriggering `change:js` for: ', sub, changed, $el.attr('id'))
+
+        // this is broken, cant re-broadcast here
+        // self.trigger('change:js', $el, model, changed, options)
+
+        // Directly call all change events
+        var methods = $el._events['change:js'] || []
+        console.log('methods: ', methods)
+        methods.forEach(function(method) {
+          method.apply(self, [$el, model, changed, options])
+        })
       })
     })
     return this
